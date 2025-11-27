@@ -1,0 +1,6 @@
+config_local.py
+__pycache__/
+*.db
+*.xlsx
+*.xls
+*.csv
