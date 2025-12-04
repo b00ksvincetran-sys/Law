@@ -67,10 +67,15 @@ def build_nav_html(toc_rows):
     """Tạo HTML cho sidebar mục lục từ bảng muc_luc_van_ban."""
     items = []
     for row in toc_rows:
-        # thụt lề theo level: 1 = chương, 2 = điều, 3 = mục...
         indent = (row.level - 1) * 16
+
+        # tránh lỗi khi có dấu " trong title
+        safe_title = (row.title or "").replace('"', '&quot;')
+
         items.append(
-            f'<div style="margin-left:{indent}px;margin-bottom:4px;">'
+            f'<div class="toc-item level-{row.level}" '
+            f'style="margin-left:{indent}px;" '
+            f'title="{safe_title}">'        # tooltip hiện full tiêu đề
             f'<a href="#{row.heading_id}" class="toc-link">{row.title}</a>'
             f'</div>'
         )
@@ -166,12 +171,24 @@ def build_full_page_html(content_html: str, nav_html: str) -> str:
     margin-bottom: 8px;
     box-sizing: border-box;
   }}
+  /* Mỗi dòng mục lục */
+  .toc-item {{
+    margin-bottom: 0;
+  }}
   .toc-link {{
+    display: block;              /* cả dòng là vùng click */
     text-decoration: none;
     color: #0366d6;
+    padding: 2px 4px;
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }}
+  
   .toc-link:hover {{
-    text-decoration: underline;
+    text-decoration: none;
+    background-color: #f1f5f9;
   }}
   mark {{ background-color: yellow; }}
 </style>
