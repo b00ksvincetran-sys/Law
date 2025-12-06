@@ -2,9 +2,18 @@
 from sqlalchemy.orm import Session
 from streamlit_agraph import Node, Edge
 import sys, os
+
+# Thêm đường dẫn để import được từ thư mục gốc
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from build_SQL_database import PhapLuat, VanBanThayThe, VanBanSuadoiBoSung, VanBanHuongDan
+# Import đầy đủ các class từ file database của bạn
+from build_SQL_database import (
+    PhapLuat, 
+    VanBanThayThe, 
+    VanBanSuadoiBoSung, 
+    VanBanHuongDan, 
+    VanBanHopNhat  # Class này đã có trong file bạn gửi
+)
 
 def get_vb_by_id(session: Session, vb_id: int):
     return session.query(PhapLuat).filter(PhapLuat.id == vb_id).first()
@@ -35,10 +44,24 @@ def get_sdbs(session, vb_id):
     return [get_vb_by_id(session, r.van_ban_sua_doi_bo_sung_id) for r in records]
 
 
+# --- HÀM MỚI BỔ SUNG: LẤY VĂN BẢN HỢP NHẤT ---
+def get_vbhn(session, vb_id):
+    """
+    Lấy danh sách văn bản hợp nhất của văn bản gốc (vb_id)
+    Dựa trên bảng VanBanHopNhat trong file database bạn gửi
+    """
+    records = session.query(VanBanHopNhat).filter(
+        VanBanHopNhat.van_ban_duoc_hop_nhat_id == vb_id
+    ).all()
+    # Trả về các văn bản kết quả hợp nhất
+    return [get_vb_by_id(session, r.van_ban_hop_nhat_id) for r in records]
+
+
 def get_huong_dan(session, vb_id):
     records = session.query(VanBanHuongDan).filter(
         VanBanHuongDan.van_ban_duoc_huong_dan_id == vb_id
     ).all()
+    # LƯU Ý: Trong DB của bạn cột này tên là 'Van_ban_huong_dan_id' (chữ V hoa)
     return [get_vb_by_id(session, r.Van_ban_huong_dan_id) for r in records]
 
 
@@ -69,10 +92,12 @@ def build_tree_graph_data(session, center_id):
     seen_ids = set()
 
     def add_node(vb):
-        if vb.id not in seen_ids:
+        if vb and vb.id not in seen_ids:
             seen_ids.add(vb.id)
             color = "red" if vb.id == center_id else "green"
-            nodes.append(Node(id=str(vb.id), label=vb.ten_van_ban[:40], color=color))
+            # Cắt ngắn tên văn bản cho đỡ rối
+            label = vb.ten_van_ban[:40] + "..." if len(vb.ten_van_ban) > 40 else vb.ten_van_ban
+            nodes.append(Node(id=str(vb.id), label=label, color=color))
 
     def add_edge(source_id, target_id, label):
         edges.append(Edge(source=str(source_id), target=str(target_id), label=label))
@@ -89,13 +114,18 @@ def build_tree_graph_data(session, center_id):
     for vb in get_sdbs(session, center_id):
         add_node(vb)
         add_edge(center_id, vb.id, "sửa đổi")
+    
+    # [MỚI] Thêm node Hợp nhất vào Graph
+    for vb in get_vbhn(session, center_id):
+        add_node(vb)
+        add_edge(center_id, vb.id, "hợp nhất")
 
     # Hướng dẫn đệ quy
     stack = [(center_id, 0)]
     while stack:
         current_id, level = stack.pop()
         for vb in get_huong_dan(session, current_id):
-            if vb.id not in seen_ids:
+            if vb and vb.id not in seen_ids:
                 add_node(vb)
                 add_edge(current_id, vb.id, f"hướng dẫn {level+1}")
                 stack.append((vb.id, level + 1))
