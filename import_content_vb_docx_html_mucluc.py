@@ -1,13 +1,16 @@
 import os
 import mammoth
+import re  # <--- BẠN ĐANG THIẾU DÒNG QUAN TRỌNG NÀY
 from bs4 import BeautifulSoup
 from sqlalchemy import create_engine, text
 
 # Lấy DATABASE_URL từ env; nếu chạy local thì dùng config_local.py
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    from config_local import DATABASE_URL
-
+    try:
+        from config_local import DATABASE_URL
+    except ImportError:
+        pass
 
 def convert_docx_to_html_file(docx_file) -> str:
     """
@@ -37,40 +40,64 @@ def convert_docx_to_html_path(docx_path: str) -> str:
 
 def build_html_with_ids_and_toc(raw_html: str):
     """
-    - Thêm id cho các heading (h2, h3, h4)
-    - Sinh list mục lục (toc) dạng:
-        [
-          {"heading_id": "h2_1", "level": 2, "title": "Chương I ..."},
-          ...
-        ]
+    Phân tích HTML để tạo mục lục với bộ lọc Regex CHẶT CHẼ (Strict Mode).
+    Chỉ nhận diện là Heading nếu có SỐ đi kèm.
     """
     soup = BeautifulSoup(raw_html, "html.parser")
-
     toc = []
-    counters = {"h2": 0, "h3": 0, "h4": 0}
+    counter = 0
 
-    for h in soup.find_all(["h2", "h3", "h4"]):
-        tag_name = h.name  # h2 / h3 / h4
-        counters[tag_name] += 1
+    # Quét các thẻ có thể chứa tiêu đề
+    tags_to_scan = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'])
 
-        hid = h.get("id")
-        if not hid:
-            hid = f"{tag_name}_{counters[tag_name]}"
-            h["id"] = hid
+    for tag in tags_to_scan:
+        text_content = tag.get_text(strip=True)
+        if not text_content:
+            continue
+        
+        # Tiền xử lý: Xóa các ký tự lạ non-breaking space nếu có
+        text_clean = text_content.replace('\xa0', ' ')
 
-        title = h.get_text(strip=True)
-        level = int(tag_name[1])  # "h2" -> 2
+        level = None
+        
+        # --- BỘ LỌC REGEX THÔNG MINH ---
+        
+        # 1. Bắt "Phần" + Số La Mã hoặc chữ "thứ" (VD: Phần I, Phần thứ nhất)
+        if re.match(r'^Phần\s+([IVX0-9]+|thứ\s)', text_clean, re.IGNORECASE):
+            level = 1
+            
+        # 2. Bắt "Chương" + Số (VD: Chương I, Chương 1)
+        elif re.match(r'^Chương\s+[IVX0-9]+', text_clean, re.IGNORECASE):
+            level = 2
+            
+        # 3. Bắt "Mục" + Số (VD: Mục 1, Mục I)
+        elif re.match(r'^Mục\s+[0-9IVX]+', text_clean, re.IGNORECASE):
+            level = 3
+            
+        # 4. Bắt "Tiểu mục" + Số
+        elif re.match(r'^Tiểu mục\s+[0-9]+', text_clean, re.IGNORECASE):
+            level = 3
+            
+        # 5. Bắt "Điều" + Số (VD: Điều 1, Điều 20)
+        elif re.match(r'^Điều\s+\d+', text_clean, re.IGNORECASE):
+            level = 4
 
-        toc.append(
-            {
-                "heading_id": hid,
+        # --- XỬ LÝ NẾU TÌM THẤY HEADING ---
+        if level is not None:
+            counter += 1
+            new_id = f"heading_{counter}"
+            
+            # Gán ID ngược lại vào thẻ HTML để Viewer cuộn tới được
+            tag['id'] = new_id
+            
+            toc.append({
+                "heading_id": new_id,
                 "level": level,
-                "title": title,
-            }
-        )
+                "title": text_clean
+            })
 
     html_with_ids = str(soup)
-    print(f"[INFO] Tổng số heading lấy được: {len(toc)}")
+    print(f"[INFO] Đã quét được {len(toc)} mục (Strict Mode).")
     return html_with_ids, toc
 
 
@@ -104,21 +131,25 @@ def save_html_and_toc_to_db(html: str, toc: list, vb_id: int):
         print(f"[DB] Đã xoá mục lục cũ của vb_id = {vb_id}")
 
         # 3. Insert mục lục mới
-        for order_no, item in enumerate(toc, start=1):
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO muc_luc_van_ban (vb_id, heading_id, level, title, order_no)
-                    VALUES (:vb_id, :heading_id, :level, :title, :order_no)
-                    """
-                ),
+        if toc:
+            # Chuẩn bị data để insert batch (nhanh hơn loop từng dòng)
+            data_to_insert = [
                 {
                     "vb_id": vb_id,
                     "heading_id": item["heading_id"],
                     "level": item["level"],
                     "title": item["title"],
-                    "order_no": order_no,
-                },
+                    "order_no": idx
+                }
+                for idx, item in enumerate(toc, start=1)
+            ]
+            
+            conn.execute(
+                text("""
+                    INSERT INTO muc_luc_van_ban (vb_id, heading_id, level, title, order_no)
+                    VALUES (:vb_id, :heading_id, :level, :title, :order_no)
+                """),
+                data_to_insert
             )
 
         print(f"[DB] Đã insert {len(toc)} dòng vào muc_luc_van_ban.")
@@ -126,23 +157,9 @@ def save_html_and_toc_to_db(html: str, toc: list, vb_id: int):
 
 def import_docx_to_db(docx_file, vb_id: int) -> int:
     """
-    Pipeline dùng cho Streamlit:
-      - docx_file: uploaded_file (file-like object)
-      - vb_id: id văn bản trong phap_luat
-    Trả về: số heading trong mục lục.
+    Pipeline dùng cho Streamlit
     """
     raw_html = convert_docx_to_html_file(docx_file)
     html_with_ids, toc = build_html_with_ids_and_toc(raw_html)
     save_html_and_toc_to_db(html_with_ids, toc, vb_id)
     return len(toc)
-
-
-# Tuỳ chọn: vẫn cho chạy local kiểu cũ bằng đường dẫn và VB_ID cố định
-if __name__ == "__main__":
-    DOCX_PATH = r"C:\LawDocs\Luat_thue_TNCN_update_27_08_2025.docx"
-    VB_ID = 164973
-
-    raw_html = convert_docx_to_html_path(DOCX_PATH)
-    html_with_ids, toc = build_html_with_ids_and_toc(raw_html)
-    save_html_and_toc_to_db(html_with_ids, toc, VB_ID)
-    print("✅ HOÀN TẤT import văn bản vào phap_luat + muc_luc_van_ban.")
