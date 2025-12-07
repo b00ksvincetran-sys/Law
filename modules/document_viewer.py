@@ -247,7 +247,7 @@ def render_document_viewer(session, vb_id, ten_vb):
     st.markdown(f"#### 📖 {ten_vb}")
     safe_title = ten_vb.replace('"', '\\"').replace("'", "\\'")
 
-    tab_view, tab_edit = st.tabs(["👁️ Chế độ Đọc (Tối ưu)", "✏️ Chỉnh sửa"])
+    tab_view, tab_edit = st.tabs(["👁️ view", "✏️ Chỉnh sửa"])
     
     with tab_view:
         full_html = get_viewer_html(content, nav_html, safe_title)
