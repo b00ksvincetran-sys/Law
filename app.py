@@ -425,13 +425,33 @@ def main():
                     with col:
                         st.write(f"**{title}**")
                         
-                        # Logic sắp xếp
-                        def get_sort_date(vb):
-                            is_vbhn = "hợp nhất" in (vb.loai_van_ban or "").lower()
-                            date_str = vb.ngay_ban_hanh if is_vbhn else vb.ngay_hieu_luc
-                            return parse_date_safe(date_str)
+                        # --- HÀM XỬ LÝ NGÀY THÁNG MẠNH MẼ HƠN (LOCAL) ---
+                        # Giúp xử lý cả định dạng dd/mm/yyyy và yyyy-mm-dd để sắp xếp đúng
+                        def get_safe_datetime_object(date_str):
+                            if not date_str:
+                                return datetime.min
+                            
+                            # Thử format dd/mm/yyyy trước
+                            try:
+                                return datetime.strptime(str(date_str).strip(), "%d/%m/%Y")
+                            except ValueError:
+                                pass
+                            
+                            # Thử format yyyy-mm-dd (trường hợp bị lỗi hiển thị ở ảnh của bạn)
+                            try:
+                                return datetime.strptime(str(date_str).strip(), "%Y-%m-%d")
+                            except ValueError:
+                                return datetime.min
 
-                        vb_list_sorted = sorted(vb_list, key=get_sort_date, reverse=True)
+                        # Logic sắp xếp: Ưu tiên ngày ban hành cho VB Hợp nhất, ngày hiệu lực cho VB khác
+                        def get_sort_key(vb):
+                            is_vbhn = "hợp nhất" in (vb.loai_van_ban or "").lower()
+                            # Nếu là hợp nhất thì dùng ngày ban hành, còn lại dùng ngày hiệu lực
+                            date_raw = vb.ngay_ban_hanh if is_vbhn else vb.ngay_hieu_luc
+                            return get_safe_datetime_object(date_raw)
+
+                        # Sắp xếp giảm dần (Mới nhất lên đầu)
+                        vb_list_sorted = sorted(vb_list, key=get_sort_key, reverse=True)
 
                         for vb in vb_list_sorted:
                             if not vb: continue
@@ -442,27 +462,35 @@ def main():
                             loai_vb_lower = (vb.loai_van_ban or "").lower()
                             tinh_trang = (vb.tinh_trang or '').lower()
                             
-                            # --- LOGIC MÀU SẮC ---
+                            # Chuẩn hóa hiển thị ngày tháng cho đồng nhất (dd/mm/yyyy)
+                            # Lấy object datetime đã xử lý để format lại cho đẹp
+                            dt_obj = get_sort_key(vb)
+                            if dt_obj != datetime.min:
+                                date_display = dt_obj.strftime("%d/%m/%Y")
+                            else:
+                                date_display = "---"
+
+                            # --- LOGIC MÀU SẮC & GHI CHÚ ---
                             if "hợp nhất" in loai_vb_lower:
                                 bg_color = "#F3E8FF" # Tím
                                 status_color = "#6B21A8"
-                                ngay_bh = vb.ngay_ban_hanh or "Chưa rõ"
-                                ghi_chu = f"Ngày ban hành: {ngay_bh}"
+                                # Đã format lại ngày cho đồng nhất với các thẻ khác
+                                ghi_chu = f"Ngày ban hành: {date_display}"
                                 
                             elif "còn hiệu lực" in tinh_trang:
                                 bg_color = "#d1fae5" # Xanh lá
                                 status_color = "#065f46"
-                                ghi_chu = f"Còn hiệu lực từ {vb.ngay_hieu_luc or '?'}"
+                                ghi_chu = f"Còn hiệu lực từ {date_display}"
                                 
                             elif "hết hiệu lực" in tinh_trang or "ngừng hiệu lực" in tinh_trang:
                                 bg_color = "#f3f4f6" # Xám
                                 status_color = "#4b5563"
-                                ghi_chu = vb.tinh_trang
+                                ghi_chu = vb.tinh_trang # Giữ nguyên text tình trạng gốc
                                 
                             elif "chưa có hiệu lực" in tinh_trang:
                                 bg_color = "#fef9c3" # Vàng
                                 status_color = "#854d0e"
-                                ghi_chu = f"Chưa có hiệu lực – từ {vb.ngay_hieu_luc or '?'}"
+                                ghi_chu = f"Chưa có hiệu lực – từ {date_display}"
                                 
                             else:
                                 bg_color = "#e0f2fe" # Xanh dương
@@ -473,9 +501,7 @@ def main():
                             relation_url = f"?vb_id={vb.id}"
                             read_url = f"?view_doc_id={vb.id}"
                             
-                            # --- HTML AN TOÀN TUYỆT ĐỐI ---
-                            # Dùng f-string bình thường nhưng sau đó dùng .replace để xóa hết xuống dòng
-                            # Cách này đảm bảo Streamlit nhận diện đây là HTML thuần, không phải Code Block
+                            # --- HTML RENDER ---
                             raw_html = f"""
                             <div class="vb-card" style="background-color: {bg_color}; border: {border_style}; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; transition: transform 0.2s;">
                                 <a href="{relation_url}" target="_blank" style="text-decoration: none; color: inherit; display: block; padding: 12px 12px 8px 12px;">
@@ -490,9 +516,7 @@ def main():
                             </div>
                             """
                             
-                            # [QUAN TRỌNG NHẤT] Xóa sạch ký tự xuống dòng trước khi render
                             clean_html = raw_html.replace("\n", "").strip()
-                            
                             st.markdown(clean_html, unsafe_allow_html=True)
 
                 for col, (title, vbs) in zip(cols, columns_data):
